@@ -12,6 +12,7 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
 from cohere_service import CohereRAGService
+from kv_storage import kv_delete_document, kv_is_available, kv_load_all_documents, kv_save_document
 from pdf_processor import PDFProcessor
 
 
@@ -78,9 +79,24 @@ _cohere_service: CohereRAGService | None = None
 _service_lock = threading.RLock()
 _document_lock = threading.RLock()
 _workspace_scan_completed = False
+_kv_loaded = False
 
-# Estado temporal de la instancia serverless actual.
+# Caché en memoria de la instancia serverless actual.
+# Al arrancar se sincroniza con KV si está disponible.
 indexed_documents: dict[str, dict[str, Any]] = {}
+
+
+def _ensure_kv_loaded() -> None:
+    """Carga los documentos desde KV la primera vez que se necesitan en esta instancia."""
+    global _kv_loaded
+    with _document_lock:
+        if _kv_loaded:
+            return
+        kv_docs = kv_load_all_documents()
+        for name, record in kv_docs.items():
+            if name not in indexed_documents:
+                indexed_documents[name] = record
+        _kv_loaded = True
 
 
 def get_pdf_processor() -> PDFProcessor:
@@ -271,10 +287,12 @@ def config_api_key():
 @app.get("/api/documents")
 def list_documents():
     try:
+        _ensure_kv_loaded()   # Sincroniza con KV si es una instancia nueva.
         load_workspace_pdfs()
         return jsonify({
             "success": True,
             "documents": get_document_summaries(),
+            "kv_available": kv_is_available(),
         })
     except Exception as error:
         app.logger.exception("Error consultando documentos")
@@ -324,17 +342,21 @@ def upload_pdf():
         processor = get_pdf_processor()
         doc_data = processor.process_document(str(file_path))
 
+        record = build_document_record(doc_data, is_preset=False)
+
         with _document_lock:
-            indexed_documents[filename] = build_document_record(
-                doc_data,
-                is_preset=False,
-            )
-            document_info = indexed_documents[filename]["info"]
+            indexed_documents[filename] = record
+            document_info = record["info"]
+
+        # Persiste en KV para que otras instancias serverless también lo vean.
+        saved_to_kv = kv_save_document(filename, record)
+        app.logger.info("Documento '%s' guardado. KV persistido: %s", filename, saved_to_kv)
 
         return jsonify({
             "success": True,
             "message": f"Documento '{filename}' subido e indexado exitosamente",
             "document": document_info,
+            "persisted": saved_to_kv,
         })
     except Exception as error:
         app.logger.exception("Error procesando el PDF subido")
@@ -370,6 +392,9 @@ def delete_document():
             "error": "Documento no encontrado",
         }), 404
 
+    # Elimina de KV para que no reaparezca en otras instancias.
+    kv_delete_document(filename)
+
     # Solo intenta eliminar archivos temporales subidos por el usuario.
     if not document["info"].get("is_preset", False):
         try:
@@ -403,6 +428,7 @@ def chat():
         if not isinstance(history, list):
             history = []
 
+        _ensure_kv_loaded()   # Sincroniza con KV si es una instancia nueva.
         load_workspace_pdfs()
         service = get_cohere_service()
 

@@ -5,7 +5,13 @@
       "src": "api/index.py",
       "use": "@vercel/python",
       "config": {
-        "maxLambdaSize": "50mb"
+        "maxLambdaSize": "50mb",
+        "includeFiles": [
+          "app.py",
+          "cohere_service.py",
+          "pdf_processor.py",
+          "kv_storage.py"
+        ]
       }
     },
     {
