@@ -466,6 +466,19 @@ def chat():
         }), 500
 
 
+@app.get("/favicon.ico")
+@app.get("/favicon.png")
+def serve_favicon():
+    """Devuelve 204 sin contenido cuando no hay favicon en el proyecto."""
+    if FRONTEND_DIR is not None:
+        for name in ("favicon.ico", "favicon.png"):
+            candidate = FRONTEND_DIR / name
+            if candidate.is_file():
+                return send_from_directory(str(FRONTEND_DIR), name)
+    # Si no existe el favicon, responde vacío para no generar errores 500 en los logs.
+    return "", 204
+
+
 @app.get("/<path:filename>")
 def serve_frontend_file(filename: str):
     """
