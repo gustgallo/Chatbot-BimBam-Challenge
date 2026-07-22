@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BimBam Buy | AI PDF Chatbot Reader (Cohere)</title>
+    <meta name="description" content="Lector inteligente de documentos PDF para BimBam Buy alimentado por Inteligencia Artificial y Cohere API.">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <!-- App Header -->
+    <header class="app-header">
+        <div class="brand">
+            <div class="logo-icon">
+                <i class="fa-solid fa-bag-shopping"></i>
+            </div>
+            <div class="brand-text">
+                <h1>BimBam Buy <span class="badge-ai">Asistente Virtual</span></h1>
+                <p>Tu centro de atención al cliente para compras, envíos, reembolsos y garantías</p>
+            </div>
+        </div>
+
+        <div class="header-actions">
+            <span class="badge-status-simple"><i class="fa-solid fa-circle"></i> En línea</span>
+        </div>
+    </header>
+
+    <!-- Main Container Layout -->
+    <main class="app-container">
+
+        <!-- Central Area: Interactive Chat Area -->
+        <section class="chat-section">
+            <div class="chat-header-bar">
+                <div class="chat-title">
+                    <i class="fa-solid fa-headset"></i>
+                    <h2>Centro de Atención al Cliente</h2>
+                </div>
+                <div class="active-sources-count">
+                    <i class="fa-solid fa-shield-check"></i>
+                    <span id="activeSourcesCountLabel">0 políticas activas</span>
+                </div>
+            </div>
+
+            <!-- Messages Stream Area -->
+            <div id="chatMessages" class="chat-messages">
+                <!-- Welcome Card -->
+                <div class="welcome-card">
+                    <div class="welcome-icon">
+                        <i class="fa-solid fa-headset"></i>
+                    </div>
+                    <h3>¡Hola! Bienvenido al centro de ayuda de BimBam Buy</h3>
+                    <p>
+                        Soy tu asistente de compras. Estoy aquí para resolver todas tus dudas sobre nuestros tiempos de envío, 
+                        políticas de reembolso, garantías de productos, métodos de pago o nuestro programa de afiliados.
+                    </p>
+
+                    <div class="quick-prompts-container">
+                        <p class="quick-prompts-title"><i class="fa-solid fa-bolt"></i> Consultas frecuentes de nuestros clientes:</p>
+                        <div class="quick-prompts">
+                            <button class="prompt-chip" data-prompt="¿Cuáles son las políticas de reembolso y cuántos días tengo para solicitar una devolución?">
+                                🔄 Políticas de Reembolso
+                            </button>
+                            <button class="prompt-chip" data-prompt="¿Qué costos y tiempos de envío maneja BimBam Buy para entregas express?">
+                                🚚 Tiempos y Costos de Envío
+                            </button>
+                            <button class="prompt-chip" data-prompt="¿Cómo funciona el Programa de Afiliados de BimBam Buy y cuáles son las comisiones?">
+                                💎 Programa de Afiliados
+                            </button>
+                            <button class="prompt-chip" data-prompt="¿Qué métodos de pago son aceptados y cuáles son los pasos de verificación de seguridad?">
+                                💳 Métodos de Pago
+                            </button>
+                            <button class="prompt-chip" data-prompt="¿Cómo puedo aplicar la garantía de un producto defectuoso?">
+                                🛡️ Manual de Garantía
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Input Area -->
+            <div class="chat-input-wrapper">
+                <form id="chatForm" class="chat-form">
+                    <textarea 
+                        id="userQuery" 
+                        rows="1" 
+                        placeholder="Escribe aquí tu pregunta sobre compras, envíos, pagos o devoluciones..."
+                        required
+                    ></textarea>
+                    <button type="submit" id="sendBtn" class="btn btn-primary" title="Enviar consulta">
+                        <i class="fa-solid fa-paper-plane"></i>
+                        <span>Enviar</span>
+                    </button>
+                </form>
+                <div class="input-footer">
+                    <small><i class="fa-solid fa-shield-halved"></i> Respuestas respaldadas por las políticas oficiales de BimBam Buy</small>
+                </div>
+            </div>
+        </section>
+
+        <!-- Right Column: PDF Sources Management Area -->
+        <aside class="sources-sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-title">
+                    <i class="fa-solid fa-book-bookmark"></i>
+                    <h3>Políticas y Guías Oficiales</h3>
+                </div>
+                <button id="selectAllSourcesBtn" class="btn-text-sm" title="Marcar/Desmarcar todos">
+                    Seleccionar Todos
+                </button>
+            </div>
+
+            <!-- Drag & Drop Upload Zone -->
+            <div class="upload-zone" id="dropZone">
+                <input type="file" id="pdfFileInput" accept=".pdf" class="file-input-hidden">
+                <div class="upload-content">
+                    <i class="fa-solid fa-file-circle-plus upload-icon"></i>
+                    <p class="upload-title">Adjuntar nuevo documento o catálogo</p>
+                    <span class="upload-subtitle">Sube archivos PDF de soporte para consultar</span>
+                    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('pdfFileInput').click()">
+                        <i class="fa-solid fa-folder-open"></i> Explorar Archivos
+                    </button>
+                </div>
+                <!-- Upload Loader -->
+                <div id="uploadLoader" class="upload-loader hidden">
+                    <i class="fa-solid fa-circle-notch fa-spin"></i>
+                    <span>Procesando documento...</span>
+                </div>
+            </div>
+
+            <!-- Presets & Loaded Documents Section -->
+            <div class="documents-section">
+                <div class="section-label">
+                    <span>POLÍTICAS Y GUÍAS DE COMPRA</span>
+                    <span id="docCountBadge" class="count-badge">0</span>
+                </div>
+
+                <!-- Document List Container -->
+                <div id="documentList" class="document-list">
+                    <!-- Dynamic Document Cards inserted via JS -->
+                    <div class="empty-docs">
+                        <i class="fa-solid fa-spinner fa-spin"></i>
+                        <p>Cargando fuentes de BimBam Buy...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Storage Info Footer -->
+            <div class="sidebar-footer">
+                <div class="bimbam-info-card">
+                    <h4><i class="fa-solid fa-store"></i> BimBam Buy E-Commerce</h4>
+                    <p>Modelo enfocado en la experiencia de compra digital ágil y segura, reembolsos garantizados y logística optimizada.</p>
+                </div>
+            </div>
+        </aside>
+
+    </main>
+
+    <!-- Custom JS -->
+    <script src="app.js"></script>
+</body>
+</html>
