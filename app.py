@@ -1,15 +1,21 @@
+import glob
 import os
 import sys
-import glob
 import tempfile
+import threading
+from pathlib import Path
+from typing import Any
 
-from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
 from dotenv import load_dotenv
+from flask import Flask, jsonify, request, send_from_directory
+from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
+from cohere_service import CohereRAGService
+from pdf_processor import PDFProcessor
 
-# Configurar stdout y stderr en UTF-8
+
+# Evita errores de caracteres especiales en la consola de Windows.
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -17,448 +23,503 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 
-from pdf_processor import PDFProcessor
-from cohere_service import CohereRAGService
-
-
-# Cargar variables de entorno desde .env en desarrollo local
+# En desarrollo local carga .env. En Vercel utiliza las variables configuradas
+# en Project Settings > Environment Variables.
 load_dotenv()
 
 
-# Crear aplicación Flask
-app = Flask(
-    __name__,
-    static_folder="static",
-    static_url_path=""
-)
+BASE_DIR = Path(__file__).resolve().parent
 
+
+def find_frontend_directory() -> Path | None:
+    """
+    Localiza automáticamente la carpeta que contiene index.html.
+
+    Admite estas estructuras:
+    - static/index.html
+    - public/index.html
+    - index.html en la raíz del proyecto
+    """
+    candidates = (
+        BASE_DIR / "static",
+        BASE_DIR / "public",
+        BASE_DIR,
+    )
+
+    for directory in candidates:
+        if (directory / "index.html").is_file():
+            return directory
+
+    return None
+
+
+FRONTEND_DIR = find_frontend_directory()
+
+# Flask no administrará automáticamente una ruta estática en la raíz. Las rutas
+# para index.html, app.js y styles.css se definen de forma explícita más abajo.
+app = Flask(__name__, static_folder=None)
+
+# El frontend y la API normalmente viven en el mismo dominio. Se conserva CORS
+# para permitir pruebas locales desde otro puerto.
 CORS(app)
 
+# Mantiene la carga por debajo del límite práctico de las funciones de Vercel.
+app.config["MAX_CONTENT_LENGTH"] = 4 * 1024 * 1024
 
-# Directorio donde se encuentra app.py
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-# Carpeta temporal para archivos subidos
-# En Vercel solamente se puede escribir temporalmente en /tmp
-UPLOAD_DIR = os.path.join(
-    tempfile.gettempdir(),
-    "bimbam_uploads"
-)
-
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# Vercel solamente permite escritura temporal dentro de /tmp.
+UPLOAD_DIR = Path(tempfile.gettempdir()) / "bimbam_uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# Servicios para procesamiento de PDF y Cohere
-pdf_processor = PDFProcessor(
-    chunk_size=700,
-    chunk_overlap=150
-)
+# Inicialización diferida. La página principal puede cargar aunque Cohere o el
+# procesamiento de PDF presenten un problema posterior.
+_pdf_processor: PDFProcessor | None = None
+_cohere_service: CohereRAGService | None = None
+_service_lock = threading.RLock()
+_document_lock = threading.RLock()
+_workspace_scan_completed = False
 
-cohere_service = CohereRAGService()
+# Estado temporal de la instancia serverless actual.
+indexed_documents: dict[str, dict[str, Any]] = {}
 
 
-# Documentos indexados en memoria
-indexed_documents = {}
+def get_pdf_processor() -> PDFProcessor:
+    global _pdf_processor
 
-
-def load_workspace_pdfs():
-    """
-    Escanea e indexa automáticamente los archivos PDF de BimBam Buy
-    que se encuentran en la carpeta principal del proyecto.
-    """
-
-    pdf_files = glob.glob(
-        os.path.join(BASE_DIR, "*.pdf")
-    )
-
-    for pdf_path in pdf_files:
-        filename = os.path.basename(pdf_path)
-
-        if filename in indexed_documents:
-            continue
-
-        try:
-            doc_data = pdf_processor.process_document(pdf_path)
-
-            indexed_documents[filename] = {
-                "info": {
-                    "source": doc_data["source"],
-                    "file_path": doc_data["file_path"],
-                    "total_pages": doc_data["total_pages"],
-                    "total_chunks": doc_data["total_chunks"],
-                    "total_words": doc_data["total_words"],
-                    "is_preset": True
-                },
-                "chunks": doc_data["chunks"]
-            }
-
-            print(
-                f"[OK] Documento indexado automáticamente: {filename}"
+    with _service_lock:
+        if _pdf_processor is None:
+            _pdf_processor = PDFProcessor(
+                chunk_size=700,
+                chunk_overlap=150,
             )
 
-        except Exception as error:
-            print(
-                f"[ERROR] Error indexando {filename}: {error}"
-            )
+        return _pdf_processor
 
 
-# Indexar los PDF incluidos en el proyecto
-load_workspace_pdfs()
+def get_cohere_service() -> CohereRAGService:
+    global _cohere_service
+
+    with _service_lock:
+        if _cohere_service is None:
+            _cohere_service = CohereRAGService()
+
+        return _cohere_service
 
 
-@app.route("/")
+def build_document_record(doc_data: dict[str, Any], is_preset: bool) -> dict[str, Any]:
+    """Convierte la respuesta de PDFProcessor al formato usado por la API."""
+    return {
+        "info": {
+            "source": doc_data["source"],
+            "file_path": doc_data["file_path"],
+            "total_pages": doc_data["total_pages"],
+            "total_chunks": doc_data["total_chunks"],
+            "total_words": doc_data["total_words"],
+            "is_preset": is_preset,
+        },
+        "chunks": doc_data["chunks"],
+    }
+
+
+def load_workspace_pdfs(force: bool = False) -> None:
+    """
+    Indexa una sola vez los PDF incluidos en la raíz del proyecto.
+
+    No se ejecuta durante la importación de app.py para reducir fallos y tiempos
+    de arranque en Vercel.
+    """
+    global _workspace_scan_completed
+
+    with _document_lock:
+        if _workspace_scan_completed and not force:
+            return
+
+        processor = get_pdf_processor()
+        pdf_files = sorted(glob.glob(str(BASE_DIR / "*.pdf")))
+
+        for pdf_path_text in pdf_files:
+            pdf_path = Path(pdf_path_text)
+            filename = pdf_path.name
+
+            if filename in indexed_documents:
+                continue
+
+            try:
+                doc_data = processor.process_document(str(pdf_path))
+                indexed_documents[filename] = build_document_record(
+                    doc_data,
+                    is_preset=True,
+                )
+                app.logger.info("Documento indexado: %s", filename)
+            except Exception:
+                # Un PDF defectuoso no debe impedir que carguen los demás.
+                app.logger.exception("No se pudo indexar el PDF: %s", filename)
+
+        _workspace_scan_completed = True
+
+
+def get_document_summaries() -> list[dict[str, Any]]:
+    with _document_lock:
+        return [document["info"] for document in indexed_documents.values()]
+
+
+def frontend_error_response():
+    checked_locations = [
+        str(BASE_DIR / "static" / "index.html"),
+        str(BASE_DIR / "public" / "index.html"),
+        str(BASE_DIR / "index.html"),
+    ]
+
+    return jsonify({
+        "success": False,
+        "error": "No se encontró index.html en static, public ni en la raíz.",
+        "checked_locations": checked_locations,
+    }), 500
+
+
+@app.get("/")
 def serve_index():
-    """
-    Muestra la página principal ubicada en static/index.html.
-    """
+    """Entrega la interfaz principal."""
+    if FRONTEND_DIR is None:
+        return frontend_error_response()
 
-    return send_from_directory(
-        app.static_folder,
-        "index.html"
-    )
+    return send_from_directory(str(FRONTEND_DIR), "index.html")
 
 
-@app.route("/api/health", methods=["GET"])
+@app.get("/api/health")
 def health():
-    """
-    Ruta sencilla para comprobar que Flask funciona en Vercel.
-    """
-
+    """Comprueba Flask, la carpeta del frontend y la variable de Cohere."""
     return jsonify({
         "success": True,
         "status": "online",
-        "message": "Aplicación Flask funcionando correctamente"
+        "message": "Aplicación Flask funcionando correctamente",
+        "frontend_directory": str(FRONTEND_DIR) if FRONTEND_DIR else None,
+        "index_found": bool(FRONTEND_DIR),
+        "cohere_key_present": bool(os.getenv("COHERE_API_KEY")),
     })
 
 
-@app.route("/api/status", methods=["GET"])
+@app.get("/api/status")
 def get_status():
-    """
-    Devuelve el estado general del chatbot y los documentos indexados.
-    """
+    try:
+        load_workspace_pdfs()
+        service = get_cohere_service()
 
-    return jsonify({
-        "status": "online",
-        "cohere_configured": cohere_service.is_configured(),
-        "total_documents": len(indexed_documents),
-        "total_chunks": sum(
-            len(document["chunks"])
-            for document in indexed_documents.values()
-        ),
-        "documents": [
-            document["info"]
-            for document in indexed_documents.values()
-        ]
-    })
+        with _document_lock:
+            total_chunks = sum(
+                len(document["chunks"])
+                for document in indexed_documents.values()
+            )
+
+            documents = get_document_summaries()
+
+        return jsonify({
+            "status": "online",
+            "cohere_configured": service.is_configured(),
+            "total_documents": len(documents),
+            "total_chunks": total_chunks,
+            "documents": documents,
+        })
+    except Exception as error:
+        app.logger.exception("Error consultando el estado")
+        return jsonify({
+            "success": False,
+            "status": "error",
+            "error": str(error),
+        }), 500
 
 
-@app.route("/api/config-key", methods=["POST"])
+@app.post("/api/config-key")
 def config_api_key():
     """
-    Permite configurar la API Key de Cohere temporalmente.
-    Para producción se recomienda usar COHERE_API_KEY en Vercel.
+    Configura una clave solo cuando el servidor no tiene COHERE_API_KEY.
+
+    En producción es preferible definirla directamente en Vercel.
     """
+    if os.getenv("COHERE_API_KEY"):
+        return jsonify({
+            "success": False,
+            "error": "La API Key ya está configurada mediante una variable de entorno.",
+        }), 403
 
-    data = request.get_json() or {}
-
-    api_key = data.get(
-        "api_key",
-        ""
-    ).strip()
+    data = request.get_json(silent=True) or {}
+    api_key = str(data.get("api_key", "")).strip()
 
     if not api_key:
         return jsonify({
             "success": False,
-            "error": "La API Key no puede estar vacía"
+            "error": "La API Key no puede estar vacía",
         }), 400
 
     try:
-        cohere_service.set_api_key(api_key)
+        service = get_cohere_service()
+        service.set_api_key(api_key)
 
         return jsonify({
             "success": True,
-            "cohere_configured": cohere_service.is_configured(),
-            "message": "API Key de Cohere configurada correctamente"
+            "cohere_configured": service.is_configured(),
+            "message": "API Key de Cohere configurada temporalmente",
         })
-
     except Exception as error:
+        app.logger.exception("Error configurando la API Key")
         return jsonify({
             "success": False,
-            "error": f"Error configurando la API Key: {str(error)}"
+            "error": f"Error configurando la API Key: {error}",
         }), 500
 
 
-@app.route("/api/documents", methods=["GET"])
+@app.get("/api/documents")
 def list_documents():
-    """
-    Devuelve todos los documentos indexados.
-    """
-
     try:
-        # Revisar si existen nuevos PDF en el proyecto
         load_workspace_pdfs()
-
-        documents = [
-            document["info"]
-            for document in indexed_documents.values()
-        ]
-
         return jsonify({
             "success": True,
-            "documents": documents
+            "documents": get_document_summaries(),
         })
-
     except Exception as error:
+        app.logger.exception("Error consultando documentos")
         return jsonify({
             "success": False,
-            "error": f"Error consultando documentos: {str(error)}"
+            "error": f"Error consultando documentos: {error}",
         }), 500
 
 
-@app.route("/api/upload", methods=["POST"])
+@app.post("/api/upload")
 def upload_pdf():
-    """
-    Permite subir temporalmente un archivo PDF.
-    Los archivos guardados en Vercel pueden desaparecer al reiniciar
-    la función serverless.
-    """
+    """Sube e indexa temporalmente un PDF de hasta 4 MB."""
+    uploaded_file = request.files.get("file")
 
-    if "file" not in request.files:
+    if uploaded_file is None:
         return jsonify({
             "success": False,
-            "error": "No se envió ningún archivo"
+            "error": "No se envió ningún archivo",
         }), 400
 
-    file = request.files["file"]
+    original_filename = uploaded_file.filename or ""
 
-    if file.filename == "":
+    if not original_filename.strip():
         return jsonify({
             "success": False,
-            "error": "Nombre de archivo inválido"
+            "error": "Nombre de archivo inválido",
         }), 400
 
-    if not file.filename.lower().endswith(".pdf"):
+    if not original_filename.lower().endswith(".pdf"):
         return jsonify({
             "success": False,
-            "error": "Solo se permiten archivos en formato PDF"
+            "error": "Solo se permiten archivos en formato PDF",
         }), 400
+
+    filename = secure_filename(original_filename)
+
+    if not filename or not filename.lower().endswith(".pdf"):
+        return jsonify({
+            "success": False,
+            "error": "Nombre de archivo inválido",
+        }), 400
+
+    file_path = UPLOAD_DIR / filename
 
     try:
-        # Limpiar el nombre del archivo para evitar rutas peligrosas
-        filename = secure_filename(file.filename)
+        uploaded_file.save(str(file_path))
+        processor = get_pdf_processor()
+        doc_data = processor.process_document(str(file_path))
 
-        if not filename:
-            return jsonify({
-                "success": False,
-                "error": "Nombre de archivo inválido"
-            }), 400
-
-        file_path = os.path.join(
-            UPLOAD_DIR,
-            filename
-        )
-
-        file.save(file_path)
-
-        doc_data = pdf_processor.process_document(file_path)
-
-        indexed_documents[filename] = {
-            "info": {
-                "source": doc_data["source"],
-                "file_path": doc_data["file_path"],
-                "total_pages": doc_data["total_pages"],
-                "total_chunks": doc_data["total_chunks"],
-                "total_words": doc_data["total_words"],
-                "is_preset": False
-            },
-            "chunks": doc_data["chunks"]
-        }
+        with _document_lock:
+            indexed_documents[filename] = build_document_record(
+                doc_data,
+                is_preset=False,
+            )
+            document_info = indexed_documents[filename]["info"]
 
         return jsonify({
             "success": True,
-            "message": (
-                f"Documento '{filename}' subido "
-                "e indexado exitosamente"
-            ),
-            "document": indexed_documents[filename]["info"]
+            "message": f"Documento '{filename}' subido e indexado exitosamente",
+            "document": document_info,
         })
-
     except Exception as error:
+        app.logger.exception("Error procesando el PDF subido")
+
+        try:
+            file_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
         return jsonify({
             "success": False,
-            "error": f"Error al procesar el PDF: {str(error)}"
+            "error": f"Error al procesar el PDF: {error}",
         }), 500
 
 
-@app.route("/api/delete-document", methods=["POST"])
+@app.post("/api/delete-document")
 def delete_document():
-    """
-    Elimina un documento del índice almacenado en memoria.
-    """
-
-    data = request.get_json() or {}
-
-    filename = data.get(
-        "filename",
-        ""
-    ).strip()
+    data = request.get_json(silent=True) or {}
+    filename = str(data.get("filename", "")).strip()
 
     if not filename:
         return jsonify({
             "success": False,
-            "error": "Debe proporcionar el nombre del documento"
+            "error": "Debe proporcionar el nombre del documento",
         }), 400
 
-    if filename in indexed_documents:
-        del indexed_documents[filename]
+    with _document_lock:
+        document = indexed_documents.pop(filename, None)
 
+    if document is None:
         return jsonify({
-            "success": True,
-            "message": (
-                f"Documento '{filename}' eliminado del índice"
-            )
-        })
+            "success": False,
+            "error": "Documento no encontrado",
+        }), 404
+
+    # Solo intenta eliminar archivos temporales subidos por el usuario.
+    if not document["info"].get("is_preset", False):
+        try:
+            Path(document["info"]["file_path"]).unlink(missing_ok=True)
+        except OSError:
+            app.logger.warning("No se pudo eliminar el archivo temporal: %s", filename)
 
     return jsonify({
-        "success": False,
-        "error": "Documento no encontrado"
-    }), 404
+        "success": True,
+        "message": f"Documento '{filename}' eliminado del índice",
+    })
 
 
-@app.route("/api/chat", methods=["POST"])
+@app.post("/api/chat")
 def chat():
-    """
-    Procesa las preguntas del usuario utilizando los fragmentos
-    de los PDF indexados y Cohere.
-    """
-
     try:
-        data = request.get_json() or {}
-
-        query = data.get(
-            "message",
-            ""
-        ).strip()
-
-        active_sources = data.get(
-            "active_sources",
-            []
-        )
-
-        history = data.get(
-            "history",
-            []
-        )
+        data = request.get_json(silent=True) or {}
+        query = str(data.get("message", "")).strip()
+        active_sources = data.get("active_sources", [])
+        history = data.get("history", [])
 
         if not query:
             return jsonify({
                 "success": False,
-                "error": "La pregunta no puede estar vacía"
+                "error": "La pregunta no puede estar vacía",
             }), 400
 
-        if not cohere_service.is_configured():
+        if not isinstance(active_sources, list):
+            active_sources = []
+
+        if not isinstance(history, list):
+            history = []
+
+        load_workspace_pdfs()
+        service = get_cohere_service()
+
+        if not service.is_configured():
             return jsonify({
                 "success": False,
                 "error": (
                     "La API Key de Cohere no está configurada. "
-                    "Agrega COHERE_API_KEY en las variables "
-                    "de entorno de Vercel."
-                )
-            }), 500
+                    "Agrega COHERE_API_KEY en las variables de entorno de Vercel."
+                ),
+            }), 503
 
-        all_chunks = []
+        all_chunks: list[dict[str, Any]] = []
 
-        # Usar únicamente las fuentes seleccionadas
-        if active_sources:
-            for source in active_sources:
-                if source in indexed_documents:
-                    all_chunks.extend(
-                        indexed_documents[source]["chunks"]
-                    )
-
-        # Si no se seleccionaron fuentes, utilizar todas
-        else:
-            for document in indexed_documents.values():
-                all_chunks.extend(
-                    document["chunks"]
-                )
+        with _document_lock:
+            if active_sources:
+                for source in active_sources:
+                    document = indexed_documents.get(str(source))
+                    if document:
+                        all_chunks.extend(document["chunks"])
+            else:
+                for document in indexed_documents.values():
+                    all_chunks.extend(document["chunks"])
 
         if not all_chunks:
             return jsonify({
                 "success": True,
                 "answer": (
-                    "No hay fuentes de información seleccionadas "
-                    "o indexadas actualmente. Activa o sube al "
-                    "menos un documento PDF."
+                    "No hay fuentes de información seleccionadas o indexadas. "
+                    "Activa o sube al menos un documento PDF."
                 ),
-                "sources": []
+                "sources": [],
             })
 
-        # Buscar los fragmentos más relacionados con la pregunta
-        top_chunks = cohere_service.search_relevant_chunks(
+        top_chunks = service.search_relevant_chunks(
             query,
             all_chunks,
-            top_k=5
+            top_k=5,
         )
 
-        # Generar respuesta con Cohere
-        response_data = cohere_service.generate_answer(
+        response_data = service.generate_answer(
             query,
             top_chunks,
-            chat_history=history
+            chat_history=history,
         )
 
         return jsonify({
             "success": True,
             "answer": response_data.get(
                 "answer",
-                "No se pudo generar una respuesta"
+                "No se pudo generar una respuesta",
             ),
-            "sources": response_data.get(
-                "sources",
-                []
-            ),
-            "error": response_data.get("error")
+            "sources": response_data.get("sources", []),
+            "error": response_data.get("error"),
         })
-
     except Exception as error:
-        app.logger.exception(
-            "Error procesando la solicitud del chatbot"
-        )
-
+        app.logger.exception("Error procesando la solicitud del chatbot")
         return jsonify({
             "success": False,
-            "error": f"Error procesando la pregunta: {str(error)}"
+            "error": f"Error procesando la pregunta: {error}",
         }), 500
 
 
-@app.errorhandler(404)
-def not_found(error):
+@app.get("/<path:filename>")
+def serve_frontend_file(filename: str):
+    """
+    Sirve app.js, styles.css, imágenes y otros recursos del frontend.
+
+    Esta ruta permite que el proyecto funcione aunque el HTML use rutas como
+    /app.js o /styles.css.
+    """
+    if FRONTEND_DIR is None:
+        return frontend_error_response()
+
+    requested_file = FRONTEND_DIR / filename
+
+    if requested_file.is_file():
+        return send_from_directory(str(FRONTEND_DIR), filename)
+
     return jsonify({
         "success": False,
-        "error": "Ruta no encontrada"
+        "error": "Ruta no encontrada",
+    }), 404
+
+
+@app.errorhandler(413)
+def file_too_large(_error):
+    return jsonify({
+        "success": False,
+        "error": "El archivo supera el límite permitido de 4 MB",
+    }), 413
+
+
+@app.errorhandler(404)
+def not_found(_error):
+    return jsonify({
+        "success": False,
+        "error": "Ruta no encontrada",
     }), 404
 
 
 @app.errorhandler(500)
 def internal_error(error):
+    app.logger.exception("Error interno no controlado: %s", error)
     return jsonify({
         "success": False,
-        "error": "Error interno del servidor"
+        "error": "Error interno del servidor",
     }), 500
 
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print(
-        "Servidor BimBam Buy AI PDF Chatbot iniciado "
-        "en http://localhost:5000"
-    )
+    print("Servidor BimBam Buy AI PDF Chatbot iniciado en http://localhost:5000")
     print("=" * 60 + "\n")
 
     app.run(
         host="0.0.0.0",
-        port=5000,
-        debug=True
+        port=int(os.getenv("PORT", "5000")),
+        debug=os.getenv("FLASK_DEBUG", "false").lower() == "true",
     )
