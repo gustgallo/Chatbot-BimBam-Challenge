@@ -170,7 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     async function handleFileUpload(file) {
-        if (!file.name.lower().endsWith('.pdf')) {
+        if (!file.name.toLowerCase().endsWith('.pdf')) {
             alert('Por favor selecciona únicamente archivos con extensión .pdf');
             return;
         }
