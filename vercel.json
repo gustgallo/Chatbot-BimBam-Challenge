@@ -3,34 +3,18 @@
   "builds": [
     {
       "src": "app.py",
-      "use": "@vercel/python"
-    },
-    {
-      "src": "public/**",
-      "use": "@vercel/static"
+      "use": "@vercel/python",
+      "config": {
+        "includeFiles": [
+          "public/**",
+          "cohere_service.py",
+          "pdf_processor.py",
+          "*.pdf"
+        ]
+      }
     }
   ],
   "routes": [
-    {
-      "src": "/styles.css",
-      "dest": "/public/styles.css"
-    },
-    {
-      "src": "/app.js",
-      "dest": "/public/app.js"
-    },
-    {
-      "src": "/favicon.ico",
-      "dest": "/public/favicon.ico",
-      "status": 404,
-      "continue": true
-    },
-    {
-      "src": "/favicon.png",
-      "dest": "/public/favicon.png",
-      "status": 404,
-      "continue": true
-    },
     {
       "src": "/(.*)",
       "dest": "/app.py"
