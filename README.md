@@ -2,9 +2,13 @@
 
 Un chatbot interactivo y moderno impulsado por Inteligencia Artificial para la lectura, extracción y consulta en lenguaje natural de fuentes documentales en formato PDF. Desarrollado específicamente para el ecosistema de e-commerce **BimBam Buy**.
 
+## URL Despliegue de Proyecto
+
+https://chatbot-bim-bam-challenge.vercel.app/
+
 ---
 
-## 📖 Descripción General
+##  Descripción General
 
 **BimBam Buy** es un e-commerce multiplataforma enfocado en brindar una experiencia de compra digital ágil y segura. Destaca por su modelo orientado al cliente, con políticas robustas de reembolso, un programa de afiliados dinámico y una infraestructura logística optimizada para garantizar entregas rápidas y soporte constante.
 
@@ -12,7 +16,7 @@ Este proyecto implementa una solución de **Generación Aumentada por Recuperaci
 
 ---
 
-## 🏗️ Arquitectura de la Solución
+##  Arquitectura de la Solución
 
 El sistema cuenta con una arquitectura desacoplada organizada de la siguiente manera:
 
@@ -45,7 +49,7 @@ El sistema cuenta con una arquitectura desacoplada organizada de la siguiente ma
 
 ---
 
-## 🛠️ Tecnologías y Herramientas
+##  Tecnologías y Herramientas
 
 ### Backend (Lógica del Sistema)
 - **Python 3.9+**: Lenguaje principal de desarrollo backend.
@@ -63,7 +67,7 @@ El sistema cuenta con una arquitectura desacoplada organizada de la siguiente ma
 
 ---
 
-## 🚀 Instrucciones para Ejecutar el Proyecto
+##  Instrucciones para Ejecutar el Proyecto
 
 ### Requisitos Previos
 - Tener instalado **Python 3.9** o superior.
@@ -107,11 +111,11 @@ El servidor se ejecutará en: `http://localhost:5000`
 
 ### Paso 5: Abrir la Aplicación Web
 Abre tu navegador (Chrome, Edge, Firefox) e ingresa a:
-👉 **`http://localhost:5000`**
+ **`http://localhost:5000`**
 
 ---
 
-## ❓ Ejemplos de Preguntas que el Agente Puede Responder
+##  Ejemplos de Preguntas que el Agente Puede Responder
 
 Gracias a los 5 documentos institucionales incluidos de **BimBam Buy**, el agente responde preguntas como:
 
@@ -123,7 +127,7 @@ Gracias a los 5 documentos institucionales incluidos de **BimBam Buy**, el agent
 
 ---
 
-## 💡 Ejemplos de Respuestas Generadas por el Agente
+##  Ejemplos de Respuestas Generadas por el Agente
 
 ### Ejemplo 1: Consulta sobre Reembolsos y Devoluciones
 > **Usuario**: *"¿Cuántos días tengo para solicitar un reembolso y cuáles son las condiciones?"*
@@ -136,7 +140,7 @@ Gracias a los 5 documentos institucionales incluidos de **BimBam Buy**, el agent
 > - Se debe adjuntar la factura electrónica o comprobante de compra.
 > - El costo de envío del retorno es asumido por BimBam Buy si el producto presentó defectos de fábrica.
 >
-> 📌 *Fuentes Citadas*: `Politicas de Reembolsos.pdf (Pág. 1)`
+>  *Fuentes Citadas*: `Politicas de Reembolsos.pdf (Pág. 1)`
 
 ---
 
@@ -151,7 +155,7 @@ Gracias a los 5 documentos institucionales incluidos de **BimBam Buy**, el agent
 > - Compras menores a $50 USD: tarifa fija de **$4.99 USD**.
 > - Envíos exprés (entrega en 24 horas): tarifa plana de **$9.99 USD**.
 >
-> 📌 *Fuentes Citadas*: `Guía de Tiempos y Costos de Envío de BimBam Buy.pdf (Pág. 2)`
+>  *Fuentes Citadas*: `Guía de Tiempos y Costos de Envío de BimBam Buy.pdf (Pág. 2)`
 
 ---
 
@@ -167,11 +171,11 @@ Gracias a los 5 documentos institucionales incluidos de **BimBam Buy**, el agent
 >
 > Las comisiones se liquidan los días 15 de cada mes a través de transferencia bancaria o PayPal.
 >
-> 📌 *Fuentes Citadas*: `Programa de Afiliados de BimBam.pdf (Pág. 1)`
+>  *Fuentes Citadas*: `Programa de Afiliados de BimBam.pdf (Pág. 1)`
 
 ---
 
-## 📌 Estructura del Proyecto
+##  Estructura del Proyecto
 
 ```
 Proyecto 1/
@@ -191,3 +195,31 @@ Proyecto 1/
 │   └── app.js                                        # Lógica Cliente JS (Vanilla)
 └── uploads/                                          # Archivos PDF subidos por usuarios
 ```
+
+##  Deploy en Vercel
+
+La aplicación fue desplegada en Vercel mediante la integración con GitHub. El proyecto utiliza Flask para el backend y la carpeta public para los archivos del frontend, como index.html, app.js y styles.css.
+
+La configuración utilizada fue la siguiente:
+
+Framework Preset: Flask
+Root Directory: ./
+Build Command: None
+Output Directory: N/A
+
+También se configuró la variable de entorno COHERE_API_KEY directamente en Vercel para evitar publicar información sensible dentro del repositorio.
+
+Cada vez que se realiza un nuevo git push a la rama main, Vercel detecta los cambios y genera automáticamente un nuevo despliegue de la aplicación.
+
+
+
+## Imagenes de Ejemplo aplicacion funcionando
+
+<img width="1600" height="813" alt="image" src="https://github.com/user-attachments/assets/e4551297-8ca5-45fa-8c46-b743706d405a" />
+
+
+<img width="1598" height="862" alt="image" src="https://github.com/user-attachments/assets/a4ee3505-ee29-408e-b304-80614ade7d52" />
+
+
+
+
